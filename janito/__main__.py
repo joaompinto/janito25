@@ -10,48 +10,22 @@ from janito.config import config
 from janito.workspace import workset
 from janito.workspace.models import ScanType  # Add this import
 from .cli.commands import (
-    handle_request, handle_ask, handle_play,
+    handle_request, handle_ask, 
     handle_scan
 )
 
+
 app = typer.Typer(pretty_exceptions_enable=False)
-
-def validate_paths(paths: Optional[List[Path]]) -> Optional[List[Path]]:
-    """Validate include paths for duplicates.
-    
-    Args:
-        paths: List of paths to validate, or None if no paths provided
-        
-    Returns:
-        Validated list of paths or None if no paths provided
-    """
-    if not paths:  # This handles both None and empty list cases
-        return None
-
-    # Convert paths to absolute and resolve symlinks
-    resolved_paths: Set[Path] = set()
-    unique_paths: List[Path] = []
-
-    for path in paths:
-        resolved = path.absolute().resolve()
-        if resolved in resolved_paths:
-            error_text = Text(f"\nError: Duplicate path provided: {path} ", style="red")
-            rich_print(error_text)
-            raise typer.Exit(1)
-        resolved_paths.add(resolved)
-        unique_paths.append(path)
-
-    return unique_paths if unique_paths else None
 
 # Initialize console for CLI output
 console = Console()
 
 
+
 def typer_main(
-    change_request: Optional[str] = typer.Argument(None, help="Change request or command"),
+    user_request: Optional[str] = typer.Argument(None, help="User request"),
     workspace_dir: Optional[Path] = typer.Option(None, "-w", "--workspace_dir", help="Working directory", file_okay=False, dir_okay=True),
     debug: bool = typer.Option(False, "--debug", help="Show debug information"),
-    single: bool = typer.Option(False, "--single", help="Skip analysis and apply changes directly"),
     verbose: bool = typer.Option(False, "--verbose", help="Show verbose output"),
     include: Optional[List[Path]] = typer.Option(None, "-i", "--include", help="Additional paths to include"),
     ask: bool = typer.Option(False, "--ask", help="Treat the request as a question about the codebase"),
@@ -71,19 +45,7 @@ def typer_main(
         return
 
     if history:
-        from janito.cli.history import display_history
         display_history()
-        return
-
-    if replay:
-        from janito.change.history import get_latest_changes_file
-        latest_changes = get_latest_changes_file()
-        if not latest_changes:
-            error_text = Text("\nError: No changes found in history to replay", style="red")
-            rich_print(error_text)
-            raise typer.Exit(1)
-        console.print(f"\n[cyan]Replaying changes from:[/] [bold]{latest_changes.absolute()}[/]")
-        handle_play(latest_changes)
         return
 
     # Check if workspace directory exists and handle creation
@@ -152,17 +114,17 @@ def typer_main(
     workset.refresh()
 
     if ask:
-        if not change_request:
+        if not user_request:
             error_text = Text("\nError: No question provided. Please provide a question as the main argument when using --ask", style="red")
             rich_print(error_text)
             raise typer.Exit(1)
-        handle_ask(change_request)
+        handle_ask(user_request)
     elif play:
         handle_play(play)
     elif scan:
         handle_scan()
-    elif change_request:
-        handle_request(change_request)
+    else:
+        handle_request(user_request, replay)
 
 def main():
     typer.run(typer_main)

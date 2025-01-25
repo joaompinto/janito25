@@ -97,35 +97,42 @@ class Workspace:
         elif path.is_file():
             self._process_file(path, scan_time)
 
-    def _process_file(self, path: Path, scan_time: float) -> None:
+    def _process_file(self, path: Path, scan_time: float, force_update: bool = False) -> None:
         """Process a single file and add it to the content."""
         try:
             # Check if file has supported extension or no extension
             supported_extensions = {
-            '.py', '.md', '.txt', '.json', '.yaml', '.yml', '.toml',
-            '.html', '.htm', '.css', '.js'
+                '.py', '.md', '.txt', '.json', '.yaml', '.yml', '.toml',
+                '.html', '.htm', '.css', '.js'
             }
             if path.suffix.lower() in supported_extensions or not path.suffix:
                 content = path.read_text(encoding='utf-8')
                 rel_path = path.relative_to(config.workspace_dir)
                 
                 # Check if file already exists in content
-                if any(f.name == str(rel_path) for f in self._content.files):
+                existing_files = [f for f in self._content.files if f.name == str(rel_path)]
+                if existing_files and not force_update:
                     if config.debug:
                         Console(stderr=True).print(f"[yellow]Debug: Skipping duplicate file: {rel_path}[/yellow]")
                     return
-                
-                seconds_ago = int(scan_time - path.stat().st_mtime)
-                
-                file_info = FileInfo(
-                    name=str(rel_path),
-                    content=content,
-                    seconds_ago=seconds_ago
-                )
-                self._content.add_file(file_info)
-                
-                if config.debug:
-                    Console(stderr=True).print(f"[cyan]Debug: Added file: {rel_path}[/cyan]")
+                elif existing_files:
+                    # Update existing file content
+                    existing_files[0].content = content
+                    existing_files[0].seconds_ago = int(scan_time - path.stat().st_mtime)
+                    if config.debug:
+                        Console(stderr=True).print(f"[cyan]Debug: Updated content: {rel_path}[/cyan]")
+                else:
+                    # Add new file
+                    seconds_ago = int(scan_time - path.stat().st_mtime)
+                    file_info = FileInfo(
+                        name=str(rel_path),
+                        content=content,
+                        seconds_ago=seconds_ago
+                    )
+                    self._content.add_file(file_info)
+                    if config.debug:
+                        Console(stderr=True).print(f"[cyan]Debug: Added file: {rel_path}[/cyan]")
+                    
         except (UnicodeDecodeError, PermissionError) as e:
             if config.debug:
                 Console(stderr=True).print(f"[red]Debug: Error reading file {path}: {str(e)}[/red]")
@@ -205,90 +212,58 @@ class Workspace:
         
         # Update workspace content
         scan_time = time.time()
-        self._process_file(abs_path, scan_time)
+        self._process_file(abs_path, scan_time, force_update=True)
 
-    def get_preview_dir(self) -> Path:
-        """Get a temporary preview directory path."""
-        if not hasattr(self, '_preview_dir'):
-            self._preview_dir = Path(tempfile.mkdtemp(prefix='janito_preview_'))
-            self._setup_preview_directory()
-        return self._preview_dir
-
-    def prepare_preview(self) -> None:
-        """Prepare preview directory by cleaning and recreating it.
-        
-        Note: Previous preview directory is kept with .old suffix for debugging.
-        """
-        if hasattr(self, '_preview_dir'):
-            # Rename old preview dir instead of removing it
-            old_dir = Path(str(self._preview_dir) + '.old')
-            if old_dir.exists():
-                shutil.rmtree(old_dir)
-            try:
-                self._preview_dir.rename(old_dir)
-            except OSError:
-                # If rename fails (e.g., directory in use), just create new one
-                pass
-            delattr(self, '_preview_dir')
-        self.get_preview_dir()
-
-    def _setup_preview_directory(self) -> None:
+    def setup_preview_directory(self) -> None:
         """Setup the preview directory with workspace contents.
         
         Creates a copy of the current workspace contents in the preview directory.
         Respects .gitignore patterns and excludes .git directory.
         """
-        try:
-            # Read .gitignore if it exists
-            gitignore_path = config.workspace_dir / '.gitignore'
-            if gitignore_path.exists():
-                gitignore = gitignore_path.read_text().splitlines()
-                # Always ignore .git directory
-                gitignore.append('.git')
-                spec = pathspec.PathSpec.from_lines('gitwildmatch', gitignore)
+        self._preview_dir = Path(tempfile.mkdtemp(prefix='janito_preview_'))
+
+        # Read .gitignore if it exists
+        gitignore_path = config.workspace_dir / '.gitignore'
+        if (gitignore_path.exists()):
+            gitignore = gitignore_path.read_text().splitlines()
+            # Always ignore .git directory
+            gitignore.append('.git')
+            spec = pathspec.PathSpec.from_lines('gitwildmatch', gitignore)
+        else:
+            # If no .gitignore exists, only ignore .git
+            spec = pathspec.PathSpec.from_lines('gitwildmatch', ['.git'])
+
+        # Copy workspace contents to preview directory
+        for item in config.workspace_dir.iterdir():
+            # Get relative path for gitignore matching
+            rel_path = item.relative_to(config.workspace_dir)
+            
+            # Skip if matches gitignore patterns
+            if spec.match_file(str(rel_path)):
+                continue
+            
+            # Skip hidden files/directories except .gitignore
+            if item.name.startswith('.') and item.name != '.gitignore':
+                continue
+                
+            if item.is_dir():
+                # For directories, we need to filter contents based on gitignore
+                def copy_filtered(src, dst):
+                    shutil.copytree(
+                        src, 
+                        dst,
+                        ignore=lambda d, files: [
+                            f for f in files 
+                            if spec.match_file(str(Path(d).relative_to(config.workspace_dir) / f))
+                        ]
+                    )
+                
+                copy_filtered(item, self._preview_dir / item.name)
             else:
-                # If no .gitignore exists, only ignore .git
-                spec = pathspec.PathSpec.from_lines('gitwildmatch', ['.git'])
+                shutil.copy2(item, self._preview_dir / item.name)
 
-            # Copy workspace contents to preview directory
-            for item in config.workspace_dir.iterdir():
-                # Get relative path for gitignore matching
-                rel_path = item.relative_to(config.workspace_dir)
-                
-                # Skip if matches gitignore patterns
-                if spec.match_file(str(rel_path)):
-                    continue
-                
-                # Skip hidden files/directories except .gitignore
-                if item.name.startswith('.') and item.name != '.gitignore':
-                    continue
-                    
-                if item.is_dir():
-                    # For directories, we need to filter contents based on gitignore
-                    def copy_filtered(src, dst):
-                        shutil.copytree(
-                            src, 
-                            dst,
-                            ignore=lambda d, files: [
-                                f for f in files 
-                                if spec.match_file(str(Path(d).relative_to(config.workspace_dir) / f))
-                            ]
-                        )
-                    
-                    copy_filtered(item, self._preview_dir / item.name)
-                else:
-                    shutil.copy2(item, self._preview_dir / item.name)
+        return self._preview_dir
 
-        except Exception as e:
-            # Clean up the temporary directory if something goes wrong
-            self.prepare_preview()
-            raise RuntimeError(f"Failed to setup preview directory: {e}")
-
-    def get_preview_path(self, path: Path) -> Path:
-        """Get the preview path for a given workspace path."""
-        if path.is_absolute():
-            raise PathNotRelativeError(f"Path must be relative: {path}")
-        return self.get_preview_dir() / path
 
     def preview_create_file(self, path: Path, content: str) -> None:
         """Create a new file in the preview directory.
@@ -313,13 +288,48 @@ class Workspace:
             raise FileNotFoundError(f"File does not exist in preview: {path}")
         preview_path.write_text(content, encoding='utf-8')
 
-    def cleanup_previews(self) -> None:
-        """Clean up all preview directories (call this when needed)."""
-        if hasattr(self, '_preview_dir'):
-            preview_base = self._preview_dir.parent
-            for path in preview_base.glob('janito_preview_*'):
-                try:
-                    if path.is_dir():
-                        shutil.rmtree(path)
-                except OSError:
-                    pass
+    def get_preview_path(self, path: Path) -> Path:
+        """Get the path to the preview directory."""
+        return self._preview_dir / path
+
+    def delete_file(self, path: Path) -> None:
+        """Delete a file from the workspace.
+        
+        Args:
+            path: Relative path to the file to delete
+            
+        Raises:
+            PathNotRelativeError: If path is absolute
+            FileNotFoundError: If file doesn't exist
+        """
+        if path.is_absolute():
+            raise PathNotRelativeError(f"Path must be relative: {path}")
+        
+        abs_path = config.workspace_dir / path
+        
+        if not abs_path.exists():
+            raise FileNotFoundError(f"File does not exist: {path}")
+        
+        # Delete the file
+        abs_path.unlink()
+        
+        if config.debug:
+            Console(stderr=True).print(f"[green]Debug: Deleted file: {path}[/green]")
+
+    def apply_changes(self, preview_dir: Path, created_files: List[Path], modified_files: Set[Path], deleted_files: Set[Path]):
+        """Apply changes from preview directory to workspace."""
+        for filename in created_files:
+            content = (preview_dir / filename).read_text(encoding='utf-8')
+            self.create_file(filename, content)
+            print("Created workspace file: ", filename)
+
+        for filename in modified_files:
+            content = (preview_dir / filename).read_text(encoding='utf-8')
+            self.modify_file(filename, content)
+            print("Modified workspace file: ", filename)  # This will now include cleaned files
+
+        for filename in deleted_files:
+            self.delete_file(filename)
+            print("Deleted workspace file: ", filename)
+
+

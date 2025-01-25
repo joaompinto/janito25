@@ -3,7 +3,6 @@ from rich.live import Live
 from rich.text import Text
 from rich.console import Console
 from rich.rule import Rule
-from rich import print
 from threading import Thread
 from janito.agents import agent
 from .config import config
@@ -107,7 +106,7 @@ def progress_send_message(message: str) -> Optional[str]:
 
     if config.debug:
         console.print("[yellow]======= Received response[/yellow]")
-        print(response)
+        print(response.content[0].text)
         console.print("[yellow]======= End of response[/yellow]")
     
     # Extract response text based on response type

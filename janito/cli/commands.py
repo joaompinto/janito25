@@ -3,11 +3,9 @@ from rich.console import Console
 from janito.agents import agent
 
 from janito.workspace import workset
-from janito.workspace.models import ScanType
 from janito.config import config
-from janito.cli.history import save_to_history
 from janito.qa import ask_question, display_answer
-from janito.change.request import request_change
+from janito.change.request import request_change, replay_saved_response
 
 
 console = Console()
@@ -26,10 +24,7 @@ def handle_scan():
     """Preview files that would be analyzed"""
     workset.show()
 
-def handle_play(filepath: Path):
-    """Replay a saved changes or debug file"""
-    console.print(f"\n[cyan]Processing file:[/] [bold]{filepath.name}[/]")
-    play_saved_changes(filepath)
+
 
 def is_dir_empty(path: Path) -> bool:
     """Check if directory is empty or only contains empty directories."""
@@ -45,10 +40,13 @@ def is_dir_empty(path: Path) -> bool:
             return False
     return True
 
-def handle_request(request: str = None):
+def handle_request(request: str = None, replay: bool = False):
     """Process modification request"""
-    if not request:
+    if not request and not replay:
         return
+    
+    if replay:
+        return replay_saved_response()
 
     is_empty = is_dir_empty(config.workspace_dir)
     if is_empty:
@@ -61,6 +59,5 @@ def handle_request(request: str = None):
 COMMANDS = {
     'ask': handle_ask,
     'scan': handle_scan,
-    'play': handle_play,
     'request': handle_request
 }
